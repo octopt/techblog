@@ -1,83 +1,12 @@
-import numpy as np
-
-def check( m ):
-    val = True
-    for i in range( 4 ):
-        for j in range( 1, 4 ):
-            for k in range( 4 ):
-                if k < j:
-                    if m[ k ][ i ] == m[ j ][ i ]:
-                        val = False
-    return val
-
-def main():
-    res1=np.array( [[1,2,3,4],[1,2,3,4],[1,2,3,4],[1,2,3,4]] )
-    print( check(res1) )
-    l=[1,2,3,4]
-    import itertools
-    ret = []
-    for v in itertools.permutations(l, 4):
-        ret.append(v)
-    count = 0
-    ans=[]
-    for i in ret:
-        for j in ret:
-            for k in ret:
-                for l in ret:
-
-                    if check(np.array( [i, j, k, l] )):
-
-                        ans.append( np.array( [i, j, k, l] ) )
-                        count += 1
-    print(count)
-    for x in ans:
-        print( x )
-
-
-    # print(res1[0][0])
-    # res1[ 0 ]=np.roll( res1[ 0 ], 1 )
-    # print( res1 )
-    # pass
-def sub():
-    # Configure data loader
-    import os
-    import torch
-    from torchvision import datasets
-    import torchvision.transforms as transforms
-    import numpy
-
-    os.makedirs("data/mnist", exist_ok=True)
-    dataloader = torch.utils.data.DataLoader(
-        datasets.MNIST(
-            "data/mnist",
-            train=True,
-            download=True,
-            transform=transforms.Compose(
-                [transforms.Resize( 28 ), transforms.ToTensor(), transforms.Normalize([0.5], [0.5])]
-            ),
-        ),
-        batch_size=64,
-        shuffle=True,
-    )
-    Tensor = torch.cuda.FloatTensor#  if cuda else torch.FloatTensor
-
-    from torch.autograd import Variable
-    for i, ( imgs, some ) in enumerate( dataloader ):
-        # valid = Variable(Tensor(imgs.size(0), 1).fill_(1.0), requires_grad=False)
-        # print( valid )
-        # print( imgs.shape )
-        # print(imgs)
-        print( imgs.type(Tensor) )
-        exit( 0 )
-        print( imgs.size(), some[0], int( some[ 0 ] ) )
-
-
 import os
 import torch
-from torch.autograd import Variable
-from torchvision import datasets
-import torchvision.transforms as transforms
+import numpy as np
+
 import torch.nn as nn
+
+import torchvision.transforms as transforms
+from torchvision import datasets
+from torchvision.utils import save_image
 
 class Generator( nn.Module ):
     def __init__( self, z_dim = 100, channel = 1, w = 28, h = 28 ):
@@ -149,9 +78,7 @@ def get_dataloader():
     )
     return dataloader
 
-from torchvision.utils import save_image
-
-if __name__ == "__main__":
+def main():
     batch_size = 64
     # 色々と初期化
     # Tensor = torch.FloatTensor ## CPU Version
@@ -215,3 +142,6 @@ if __name__ == "__main__":
             batches_done = epoch * len(dataloader) + i
             if batches_done % 400 == 0:
                 save_image(fake_images.data[:25], "images/%08d.png" % batches_done, nrow=5, normalize=True)
+                
+if __name__ == "__main__":
+    main()
