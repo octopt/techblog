@@ -154,22 +154,15 @@ from torchvision.utils import save_image
 if __name__ == "__main__":
     batch_size = 64
     # 色々と初期化
-    Tensor = torch.FloatTensor
-    generator     = Generator()
+    # Tensor = torch.FloatTensor ## CPU Version
+    Tensor = torch.cuda.FloatTensor
+    generator     = Generator().cuda()
     optimizer_G   = torch.optim.Adam( generator.parameters(), lr=0.0002, betas=( 0.5, 0.999 ) )
-    discriminator = Discriminator()
+    discriminator = Discriminator().cuda()
     optimizer_D   = torch.optim.Adam( discriminator.parameters(), lr=0.0002, betas=( 0.5, 0.999 ) )
     # ロス関数の初期化
-    adversarial_loss = torch.nn.BCELoss()
+    adversarial_loss = torch.nn.BCELoss().cuda()
     
-    gpu=True # GPUを使いたければONに
-    if gpu: # 
-        generator.cuda()
-        discriminator.cuda()
-        adversarial_loss.cuda()
-        Tensor = torch.cuda.FloatTensor
-
-
     epoch_size = 200 # 普通は100-200くらい。
     for epoch in range( epoch_size ):
         dataloader = get_dataloader()
@@ -177,8 +170,6 @@ if __name__ == "__main__":
             batch_size = real_images.size( 0 )
             # 正解と不正解のラベルを作る
             valid = torch.ones( (batch_size,1), requires_grad=False ).cuda()
-            # valid            = Variable( Tensor( batch_size, 1 ).fill_( 1.0 ), requires_grad=False )
-            # fake             = Variable( Tensor( batch_size, 1 ).fill_( 0.0 ), requires_grad=False )
             fake = torch.zeros( (batch_size,1), requires_grad=False ).cuda()
             # ---------------------
             #  Dの学習
@@ -187,11 +178,8 @@ if __name__ == "__main__":
             for j in range( 20 ):
                 # まず初期化
                 optimizer_D.zero_grad()
-                # 画像をテンソル化。特に意味はない。計算をするためにキャスト変換
-                # real_images = Variable( real_images.type( Tensor ) )
                 # 偽画像の作成
                 # ランダムな潜在変数を作成
-                # z = Variable( Tensor( np.random.normal( 0, 1, ( real_images.shape[0], 100 ) ) ) )
                 z = torch.empty( real_images.shape[0], 100,requires_grad=False ).normal_( mean = 0, std = 1 ).cuda()
                 # fake imageを取得
                 fake_images = generator( z )
@@ -209,8 +197,6 @@ if __name__ == "__main__":
             # まず初期化
             optimizer_G.zero_grad()
             # ランダムな潜在変数を作成
-            # print( real_images.shape[0] )
-            # z = Variable( Tensor( np.random.normal( 0, 1, ( real_images.shape[0], 100 ) ) ) )
             z = torch.empty( real_images.shape[0], 100,requires_grad=False ).normal_( mean = 0, std = 1 ).cuda()
             # fake imageを取得
             fake_images = generator( z )
@@ -229,8 +215,3 @@ if __name__ == "__main__":
             batches_done = epoch * len(dataloader) + i
             if batches_done % 400 == 0:
                 save_image(fake_images.data[:25], "images/%08d.png" % batches_done, nrow=5, normalize=True)
-                # torch.save( generator.state_dict(), "images/out_%d" % batches_done)
-                # torch.save( discriminator.state_dict(), "images/out_%d" % batches_done)
-                # the_model = TheModelClass(*args, **kwargs)
-                # the_model.load_state_dict(torch.load(PATH))
-            
