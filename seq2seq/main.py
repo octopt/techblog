@@ -147,9 +147,9 @@ def main():
     training_pairs = [ tensorsFromPair( input_lang, output_lang ) for i in range( n_iters ) ]
     criterion = nn.NLLLoss()
     
-    for i in range( 1, n_iters + 1):
+    for epoch in range( 1, n_iters + 1):
         
-        input_tensor, output_tensor = training_pairs[ i - 1 ]
+        input_tensor, output_tensor = training_pairs[ epoch - 1 ]
 
         encoder_hidden = encoder.initHidden()
         encoder_optimizer.zero_grad()
@@ -178,11 +178,10 @@ def main():
         loss.backward()
         encoder_optimizer.step()
         decoder_optimizer.step()
-        print( loss.item() / output_length )
-
+        if epoch % 10 == 0:
+            print( "[epoch num %d (%d)] [ loss: %f]" % ( epoch, n_iters, loss.item() / output_length ) )
+                   
 
 if __name__ == '__main__':
     main()
-    # input_lang, output_lang, pairs = prepareData( 'eng', 'fra', True )
-    # print( random.choice( pairs ) )
     
