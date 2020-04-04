@@ -128,19 +128,17 @@ def main():
     n_iters       = 75000
     learning_rate = 0.01
     hidden_size   = 256
-    max_length = 10
-    input_lang = Lang( 'fr.txt' )
-    output_lang = Lang( 'en.txt')
+    max_length    = 10
     
-    allow_list = [x and y for (x,y) in zip( input_lang.get_allow_list( max_length ), output_lang.get_allow_list( max_length ) ) ]
-            
+    input_lang  = Lang( 'fr.txt' )
+    output_lang = Lang( 'en.txt')
+    allow_list  = [x and y for (x,y) in zip( input_lang.get_allow_list( max_length ), output_lang.get_allow_list( max_length ) ) ]
     input_lang.load_file( allow_list )
     output_lang.load_file( allow_list )
     
     
-    encoder = Encoder( input_lang.n_words, hidden_size ).to( device )
-    decoder = Decoder( hidden_size, output_lang.n_words ).to( device )
-    
+    encoder           = Encoder( input_lang.n_words, hidden_size ).to( device )
+    decoder           = Decoder( hidden_size, output_lang.n_words ).to( device )
     encoder_optimizer = optim.SGD( encoder.parameters(), lr=learning_rate )
     decoder_optimizer = optim.SGD( decoder.parameters(), lr=learning_rate )
 
@@ -148,9 +146,7 @@ def main():
     criterion = nn.NLLLoss()
     
     for epoch in range( 1, n_iters + 1):
-        
         input_tensor, output_tensor = training_pairs[ epoch - 1 ]
-
         encoder_hidden = encoder.initHidden()
         encoder_optimizer.zero_grad()
         decoder_optimizer.zero_grad()
@@ -180,8 +176,56 @@ def main():
         decoder_optimizer.step()
         if epoch % 10 == 0:
             print( "[epoch num %d (%d)] [ loss: %f]" % ( epoch, n_iters, loss.item() / output_length ) )
-                   
+            
+        if epoch % 10000 == 0:
+            torch.save(encoder.state_dict(), './encoder_%d_%f' % (epoch, loss.item() / output_length  ))
+            torch.save(decoder.state_dict(), './decoder_%d_%f' % (epoch, loss.item() / output_length  ))
+            
+    torch.save(encoder.state_dict(), './encoder_%d_%f' % (epoch, loss.item() / output_length  ))
+    torch.save(decoder.state_dict(), './decoder_%d_%f' % (epoch, loss.item() / output_length  ))
+    
+def evaluate( sentence, max_length=10):
+
+    input_lang  = Lang( 'fr.txt' )
+    output_lang = Lang( 'en.txt')
+    allow_list = [x and y for (x,y) in zip( input_lang.get_allow_list( max_length ), output_lang.get_allow_list( max_length ) ) ]
+    input_lang.load_file( allow_list )
+    output_lang.load_file( allow_list )
+    hidden_size = 256
+    encoder = Encoder( input_lang.n_words, hidden_size ).to( device )
+    decoder = Decoder( hidden_size, output_lang.n_words ).to( device )
+    
+
+    encoder.load_state_dict(torch.load('encoders/encoder_75000_2.107082'))
+    decoder.load_state_dict(torch.load('decoders/decoder_75000_2.107082'))
+    
+    with torch.no_grad():
+        input_tensor   = tensorFromSentence(input_lang, sentence)
+        input_length   = input_tensor.size()[0]
+        encoder_hidden = encoder.initHidden()
+        
+        for ei in range(input_length):
+            encoder_output, encoder_hidden = encoder(input_tensor[ei], encoder_hidden)
+
+        decoder_input = torch.tensor([[SOS_token]], device=device)  # SOS
+        decoder_hidden = encoder_hidden
+        decoded_words = []
+        decoder_attentions = torch.zeros(max_length, max_length)
+        
+        for di in range(max_length):
+            decoder_output, decoder_hidden = decoder( decoder_input, decoder_hidden )
+            topv, topi = decoder_output.data.topk(1)
+            if topi.item() == EOS_token:
+                decoded_words.append('<EOS>')
+                break
+            else:
+                decoded_words.append(output_lang.index2word[topi.item()])
+
+            decoder_input = topi.squeeze().detach()
+
+        return decoded_words, decoder_attentions[:di + 1]    
 
 if __name__ == '__main__':
-    main()
+    # main()
+    print(evaluate( 'tu es tres gentil .', 10 ) )
     
