@@ -74,7 +74,41 @@ class Lang:
             self.index2word[ self.n_words ] = word
             self.n_words += 1
         else:
-            self.word2count[word] += 1        
+            self.word2count[word] += 1
+
+class DecoderAttention(nn.Module):
+    def __init__( self, hidden_size, output_size, max_length, dropout_p=0.1 ):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.output_size = output_size
+        self.dropout_p   = dropout_p
+        self.max_length  = max_length
+
+        self.embedding    = nn.Embedding(self.output_size, self.hidden_size)
+        self.attn         = nn.Linear(self.hidden_size * 2, self.max_length)
+        self.attn_combine = nn.Linear(self.hidden_size * 2, self.hidden_size)
+        self.dropout      = nn.Dropout(self.dropout_p)
+        self.gru          = nn.GRU(self.hidden_size, self.hidden_size)
+        self.out          = nn.Linear(self.hidden_size, self.output_size)
+
+    def forward( self, input, hidden, encoder_outputs ):
+        embedded = self.embedding(input).view(1, 1, -1)
+        embedded = self.dropout(embedded)
+
+        attn_weights = F.softmax( self.attn(torch.cat(( embedded[0], hidden[0] ), 1)), dim=1 )
+        attn_applied = torch.bmm( attn_weights.unsqueeze(0), encoder_outputs.unsqueeze(0) )
+
+        output = torch.cat( ( embedded[0], attn_applied[0] ), 1 )
+        output = self.attn_combine(output).unsqueeze(0)
+
+        output = F.relu( output )
+        output, hidden = self.gru( output, hidden )
+
+        output = F.log_softmax( self.out( output[0] ), dim=1 )
+        return output, hidden, attn_weights
+
+    def initHidden(self):
+        return torch.zeros( 1, 1, self.hidden_size ).to( device )
 
 # Start core part
 class Encoder( nn.Module ):
@@ -125,20 +159,26 @@ def tensorsFromPair( input_lang, output_lang ):
     return (input_tensor, output_tensor)
 
 def main():
-    n_iters       = 75000
+    n_iters       = 75000 
     learning_rate = 0.01
     hidden_size   = 256
-    max_length    = 10
+    max_length    = 30
+    use_attention = True
     
-    input_lang  = Lang( 'fr.txt' )
-    output_lang = Lang( 'en.txt')
-    allow_list  = [x and y for (x,y) in zip( input_lang.get_allow_list( max_length ), output_lang.get_allow_list( max_length ) ) ]
+    input_lang  = Lang( 'jpn.txt' )
+    output_lang = Lang( 'eng.txt')
+    # allow_list  = output_lang.get_allow_list( max_length )
+    allow_list = [x and y for (x,y) in zip( input_lang.get_allow_list( max_length ), output_lang.get_allow_list( max_length ) ) ]
+    
     input_lang.load_file( allow_list )
     output_lang.load_file( allow_list )
-    
+
     
     encoder           = Encoder( input_lang.n_words, hidden_size ).to( device )
-    decoder           = Decoder( hidden_size, output_lang.n_words ).to( device )
+    if use_attention:
+        decoder           = DecoderAttention( hidden_size, output_lang.n_words, max_length ).to( device )
+    else:
+        decoder           = Decoder( hidden_size, output_lang.n_words ).to( device )
     encoder_optimizer = optim.SGD( encoder.parameters(), lr=learning_rate )
     decoder_optimizer = optim.SGD( decoder.parameters(), lr=learning_rate )
 
@@ -147,23 +187,32 @@ def main():
     
     for epoch in range( 1, n_iters + 1):
         input_tensor, output_tensor = training_pairs[ epoch - 1 ]
-        encoder_hidden = encoder.initHidden()
+        encoder_hidden              = encoder.initHidden()
         encoder_optimizer.zero_grad()
         decoder_optimizer.zero_grad()
     
         input_length  = input_tensor.size(0)
         output_length = output_tensor.size(0)
-        
+
+        if use_attention:
+            encoder_outputs = torch.zeros(max_length, encoder.hidden_size ).to( device )
+            
         # Encoder phese
         for i in range( input_length ):
             encoder_output, encoder_hidden = encoder( input_tensor[ i ], encoder_hidden )
+            if use_attention:
+                encoder_outputs[i] = encoder_output[0, 0]
             
         # Decoder phese
         loss = 0
         decoder_input  = torch.tensor( [ [ SOS_token ] ] ).to( device )
         decoder_hidden = encoder_hidden
         for i in range( output_length ):
-            decoder_output, decoder_hidden = decoder( decoder_input, decoder_hidden )
+            if use_attention:
+                decoder_output, decoder_hidden, decoder_attention = decoder( decoder_input, decoder_hidden, encoder_outputs )
+            else:
+                decoder_output, decoder_hidden = decoder( decoder_input, decoder_hidden )
+                
             decoder_input = output_tensor[ i ]
             if random.random() < 0.5: 
                 topv, topi                     = decoder_output.topk( 1 )
@@ -177,35 +226,69 @@ def main():
         if epoch % 10 == 0:
             print( "[epoch num %d (%d)] [ loss: %f]" % ( epoch, n_iters, loss.item() / output_length ) )
             
-        if epoch % 10000 == 0:
-            torch.save(encoder.state_dict(), './encoder_%d_%f' % (epoch, loss.item() / output_length  ))
-            torch.save(decoder.state_dict(), './decoder_%d_%f' % (epoch, loss.item() / output_length  ))
-            
     torch.save(encoder.state_dict(), './encoder_%d_%f' % (epoch, loss.item() / output_length  ))
     torch.save(decoder.state_dict(), './decoder_%d_%f' % (epoch, loss.item() / output_length  ))
     
 def evaluate( sentence, max_length=10):
 
-    input_lang  = Lang( 'fr.txt' )
-    output_lang = Lang( 'en.txt')
-    allow_list = [x and y for (x,y) in zip( input_lang.get_allow_list( max_length ), output_lang.get_allow_list( max_length ) ) ]
-    input_lang.load_file( allow_list )
-    output_lang.load_file( allow_list )
+    input_lang = Lang( 'jpn.txt')
+    output_lang  = Lang( 'eng.txt' )
+    
+    use_attention = True
+    
+    if False:
+        output_lang  = Lang( 'en.txt' )
+        allow_list = [x and y for (x,y) in zip( input_lang.get_allow_list( max_length ), output_lang.get_allow_list( max_length ) ) ]
+        input_lang.load_file( allow_list )
+        output_lang.load_file( allow_list )
+    else:
+        if use_attention:
+            allow_list = [x and y for (x,y) in zip( input_lang.get_allow_list( max_length ), output_lang.get_allow_list( max_length ) ) ]
+        else:
+            allow_list  = output_lang.get_allow_list( max_length )
+        input_lang.load_file( allow_list )
+        output_lang.load_file( allow_list )
+        
     hidden_size = 256
     encoder = Encoder( input_lang.n_words, hidden_size ).to( device )
-    decoder = Decoder( hidden_size, output_lang.n_words ).to( device )
     
+    if use_attention:
+        decoder           = DecoderAttention( hidden_size, output_lang.n_words, max_length ).to( device )
+    else:
+        decoder = Decoder( hidden_size, output_lang.n_words ).to( device )
+        
 
-    encoder.load_state_dict(torch.load('encoders/encoder_75000_2.107082'))
-    decoder.load_state_dict(torch.load('decoders/decoder_75000_2.107082'))
+
+    # encoder.load_state_dict(torch.load('encoders/encoder_75000_2.107082'))
+    # decoder.load_state_dict(torch.load('decoders/decoder_75000_2.107082'))
+    FRENCH = False
+    if FRENCH:
+        encoder.load_state_dict(torch.load('encoder_75000_2.335337'))
+        decoder.load_state_dict(torch.load('decoder_75000_2.335337'))
+    JAPANESE = True
+    
+    if JAPANESE: # without anotation, maxlength is 30
+        if use_attention:
+
+            encoder.load_state_dict(torch.load('encoder_75000_3.389340'))
+            decoder.load_state_dict(torch.load('decoder_75000_3.389340'))
+        else:
+            print( 'hello' )
+            encoder.load_state_dict(torch.load('encoder_75000_1.985168'))
+            decoder.load_state_dict(torch.load('decoder_75000_1.985168'))
+
     
     with torch.no_grad():
         input_tensor   = tensorFromSentence(input_lang, sentence)
         input_length   = input_tensor.size()[0]
         encoder_hidden = encoder.initHidden()
+        if use_attention:
+            encoder_outputs = torch.zeros(max_length, encoder.hidden_size, device=device)
         
         for ei in range(input_length):
             encoder_output, encoder_hidden = encoder(input_tensor[ei], encoder_hidden)
+            if use_attention:
+                encoder_outputs[ei] += encoder_output[0, 0]
 
         decoder_input = torch.tensor([[SOS_token]], device=device)  # SOS
         decoder_hidden = encoder_hidden
@@ -213,10 +296,18 @@ def evaluate( sentence, max_length=10):
         decoder_attentions = torch.zeros(max_length, max_length)
         
         for di in range(max_length):
-            decoder_output, decoder_hidden = decoder( decoder_input, decoder_hidden )
+            if use_attention:
+                decoder_output, decoder_hidden, decoder_attention = decoder( decoder_input, decoder_hidden, encoder_outputs )
+            else:
+                decoder_output, decoder_hidden = decoder( decoder_input, decoder_hidden )
+                
             topv, topi = decoder_output.data.topk(1)
             if topi.item() == EOS_token:
                 decoded_words.append('<EOS>')
+
+
+
+
                 break
             else:
                 decoded_words.append(output_lang.index2word[topi.item()])
@@ -227,5 +318,16 @@ def evaluate( sentence, max_length=10):
 
 if __name__ == '__main__':
     # main()
-    print(evaluate( 'tu es tres gentil .', 10 ) )
+    # exit( 0 )
+    import MeCab
+    import unicodedata
+    wakati = MeCab.Tagger("-Owakati")
+    sentence = 'この曲のことを知りません.'
+    # sentence = '助けてくれませんか?'
+    # sentence = '外で雨が降っているけど,仕事をしなければならないので会社に行く.'
     
+    sentence = unicodedata.normalize( "NFKC", sentence.strip() )
+    a=wakati.parse( sentence.strip() ).split()
+    ret =" ".join( a )
+    print( ret )
+    print(evaluate( ret, 30 ) )
