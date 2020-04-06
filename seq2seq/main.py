@@ -77,29 +77,30 @@ class Lang:
             self.word2count[word] += 1
 
 class DecoderAttention(nn.Module):
-    def __init__( self, hidden_size, output_size, max_length, dropout_p=0.1 ):
+    def __init__( self, hidden_size, embedding_size, output_size, max_length, dropout_p=0.1 ):
         super().__init__()
         self.hidden_size = hidden_size
         self.output_size = output_size
+        self.embedding_size = embedding_size
         self.dropout_p   = dropout_p
         self.max_length  = max_length
 
-        self.embedding    = nn.Embedding(self.output_size, self.hidden_size)
-        self.attn         = nn.Linear(self.hidden_size * 2, self.max_length)
-        self.attn_combine = nn.Linear(self.hidden_size * 2, self.hidden_size)
-        self.dropout      = nn.Dropout(self.dropout_p)
-        self.gru          = nn.GRU(self.hidden_size, self.hidden_size)
-        self.out          = nn.Linear(self.hidden_size, self.output_size)
+        self.embedding    = nn.Embedding( self.output_size, self.embedding_size )
+        self.attn         = nn.Linear( self.embedding_size + self.hidden_size, self.max_length )
+        self.attn_combine = nn.Linear( self.embedding_size + self.hidden_size, self.hidden_size )
+        self.dropout      = nn.Dropout( self.dropout_p )
+        self.gru          = nn.GRU( self.embedding_size, self.hidden_size )
+        self.out          = nn.Linear( self.hidden_size, self.output_size )
 
     def forward( self, input, hidden, encoder_outputs ):
         embedded = self.embedding(input).view(1, 1, -1)
         embedded = self.dropout(embedded)
 
-        attn_weights = F.softmax( self.attn(torch.cat(( embedded[0], hidden[0] ), 1)), dim=1 )
-        attn_applied = torch.bmm( attn_weights.unsqueeze(0), encoder_outputs.unsqueeze(0) )
+        attn_weights = F.softmax( self.attn( torch.cat( ( embedded[0], hidden[0] ), 1) ), dim=1 )
+        attn_applied = torch.bmm( attn_weights.unsqueeze(0), encoder_outputs.unsqueeze( 0 ) )
 
-        output = torch.cat( ( embedded[0], attn_applied[0] ), 1 )
-        output = self.attn_combine(output).unsqueeze(0)
+        output = torch.cat( ( embedded[0], attn_applied[ 0 ] ), 1 )
+        output = self.attn_combine( output ).unsqueeze( 0 )
 
         output = F.relu( output )
         output, hidden = self.gru( output, hidden )
@@ -112,11 +113,11 @@ class DecoderAttention(nn.Module):
 
 # Start core part
 class Encoder( nn.Module ):
-    def __init__( self, input_size, hidden_size ):
+    def __init__( self, input_size, embedding_size, hidden_size ):
         super().__init__()
         self.hidden_size = hidden_size
-        self.embedding   = nn.Embedding( input_size, hidden_size )
-        self.gru         = nn.GRU( hidden_size, hidden_size )
+        self.embedding   = nn.Embedding( input_size, embedding_size )
+        self.gru         = nn.GRU( embedding_size, hidden_size )
 
     def initHidden( self ):
         return torch.zeros( 1, 1, self.hidden_size ).to( device )
@@ -127,19 +128,19 @@ class Encoder( nn.Module ):
         return out, new_hidden
 
 class Decoder( nn.Module ):
-    def __init__( self, hidden_size, output_size ):
+    def __init__( self, hidden_size, embedding_size, output_size ):
         super().__init__()
         self.hidden_size = hidden_size
-        self.embedding   = nn.Embedding( output_size, hidden_size )
-        self.gru         = nn.GRU( hidden_size, hidden_size )
+        self.embedding   = nn.Embedding( output_size, embedding_size )
+        self.gru         = nn.GRU( embedding_size, hidden_size )
         self.out         = nn.Linear( hidden_size, output_size )
         self.softmax     = nn.LogSoftmax( dim = 1 )
         
     def forward( self, _input, hidden ):
-        output = self.embedding( _input ).view( 1, 1, -1 )
-        output = F.relu( output )
+        output         = self.embedding( _input ).view( 1, 1, -1 )
+        output         = F.relu( output )
         output, hidden = self.gru( output, hidden )
-        output = self.softmax( self.out( output[ 0 ] ) )
+        output         = self.softmax( self.out( output[ 0 ] ) )
         return output, hidden
     
     def initHidden( self ):
@@ -152,38 +153,39 @@ def tensorFromSentence( lang, sentence ):
 
 def tensorsFromPair( input_lang, output_lang ):
     input_sentence, index = input_lang.choice()
-    output_sentence = output_lang.get_sentence( index )
+    output_sentence       = output_lang.get_sentence( index )
     
-    input_tensor = tensorFromSentence( input_lang, input_sentence )
+    input_tensor  = tensorFromSentence( input_lang, input_sentence )
     output_tensor = tensorFromSentence( output_lang, output_sentence )
     return (input_tensor, output_tensor)
 
 def main():
-    n_iters       = 75000 
-    learning_rate = 0.01
+    n_iters       = 75000
+    learning_rate = 0.01 * 0.8
+    embedding_size = 256
     hidden_size   = 256
     max_length    = 30
-    use_attention = True
+    
+    use_attention = False
     
     input_lang  = Lang( 'jpn.txt' )
     output_lang = Lang( 'eng.txt')
-    # allow_list  = output_lang.get_allow_list( max_length )
-    allow_list = [x and y for (x,y) in zip( input_lang.get_allow_list( max_length ), output_lang.get_allow_list( max_length ) ) ]
+    allow_list  = output_lang.get_allow_list( max_length )
+    # allow_list = [x and y for (x,y) in zip( input_lang.get_allow_list( max_length ), output_lang.get_allow_list( max_length ) ) ]
     
     input_lang.load_file( allow_list )
     output_lang.load_file( allow_list )
-
     
-    encoder           = Encoder( input_lang.n_words, hidden_size ).to( device )
+    encoder           = Encoder( input_lang.n_words, embedding_size, hidden_size ).to( device )
     if use_attention:
-        decoder           = DecoderAttention( hidden_size, output_lang.n_words, max_length ).to( device )
+        decoder           = DecoderAttention( hidden_size, embedding_size, output_lang.n_words, max_length ).to( device )
     else:
-        decoder           = Decoder( hidden_size, output_lang.n_words ).to( device )
+        decoder           = Decoder( hidden_size, embedding_size, output_lang.n_words ).to( device )
     encoder_optimizer = optim.SGD( encoder.parameters(), lr=learning_rate )
     decoder_optimizer = optim.SGD( decoder.parameters(), lr=learning_rate )
 
     training_pairs = [ tensorsFromPair( input_lang, output_lang ) for i in range( n_iters ) ]
-    criterion = nn.NLLLoss()
+    criterion      = nn.NLLLoss()
     
     for epoch in range( 1, n_iters + 1):
         input_tensor, output_tensor = training_pairs[ epoch - 1 ]
@@ -234,7 +236,7 @@ def evaluate( sentence, max_length=10):
     input_lang = Lang( 'jpn.txt')
     output_lang  = Lang( 'eng.txt' )
     
-    use_attention = True
+    use_attention = False
     
     if False:
         output_lang  = Lang( 'en.txt' )
@@ -245,7 +247,8 @@ def evaluate( sentence, max_length=10):
         if use_attention:
             allow_list = [x and y for (x,y) in zip( input_lang.get_allow_list( max_length ), output_lang.get_allow_list( max_length ) ) ]
         else:
-            allow_list  = output_lang.get_allow_list( max_length )
+            # allow_list  = output_lang.get_allow_list( max_length )
+            allow_list = [x and y for (x,y) in zip( input_lang.get_allow_list( max_length ), output_lang.get_allow_list( max_length ) ) ]
         input_lang.load_file( allow_list )
         output_lang.load_file( allow_list )
         
@@ -274,8 +277,11 @@ def evaluate( sentence, max_length=10):
             decoder.load_state_dict(torch.load('decoder_75000_3.389340'))
         else:
             print( 'hello' )
-            encoder.load_state_dict(torch.load('encoder_75000_1.985168'))
-            decoder.load_state_dict(torch.load('decoder_75000_1.985168'))
+            # encoder.load_state_dict(torch.load('encoder_75000_1.985168'))
+            # decoder.load_state_dict(torch.load('decoder_75000_1.985168'))
+            # maxlenght 50, iter 4x times. 
+            encoder.load_state_dict(torch.load('encoder_300000_0.716090'))
+            decoder.load_state_dict(torch.load('decoder_300000_0.716090'))
 
     
     with torch.no_grad():
@@ -317,12 +323,18 @@ def evaluate( sentence, max_length=10):
         return decoded_words, decoder_attentions[:di + 1]    
 
 if __name__ == '__main__':
-    # main()
-    # exit( 0 )
+    main()
+    exit( 0 )
     import MeCab
     import unicodedata
     wakati = MeCab.Tagger("-Owakati")
     sentence = 'この曲のことを知りません.'
+    sentence = 'とても悲しいです.'
+    sentence = '美味しい料理を食べたい.'
+    sentence = '海外に旅行に行きたい.'
+    sentence = '小学校では沢山楽しい思い出があります.'
+    sentence = 'この映画は面白いですか?'
+    
     # sentence = '助けてくれませんか?'
     # sentence = '外で雨が降っているけど,仕事をしなければならないので会社に行く.'
     
@@ -330,4 +342,5 @@ if __name__ == '__main__':
     a=wakati.parse( sentence.strip() ).split()
     ret =" ".join( a )
     print( ret )
-    print(evaluate( ret, 30 ) )
+    # print(evaluate( ret, 30 ) )
+    print(evaluate( ret, 50 ) )
