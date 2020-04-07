@@ -1,8 +1,3 @@
-from __future__ import unicode_literals, print_function, division
-from io import open
-import unicodedata
-import string
-import re
 import random
 
 import torch
@@ -116,14 +111,19 @@ class Encoder( nn.Module ):
     def __init__( self, input_size, embedding_size, hidden_size ):
         super().__init__()
         self.hidden_size = hidden_size
+        # 単語をベクトル化する。1単語はembedding_sie次元のベクトルとなる
         self.embedding   = nn.Embedding( input_size, embedding_size )
+        # GRUに依る実装. 
         self.gru         = nn.GRU( embedding_size, hidden_size )
 
     def initHidden( self ):
         return torch.zeros( 1, 1, self.hidden_size ).to( device )
 
     def forward( self, _input, hidden ):
-        embedded = self.embedding( _input ).view( 1, 1, -1 )
+        # 単語のベクトル化
+        embedded        = self.embedding( _input ).view( 1, 1, -1 )
+        # ベクトル化したデータをGRUに噛ませる。通常のSeq2Seqでは出力outは使われることはない。
+        # ただしSeq2Seq + Attentionをする場合にはoutの値を使うことになるので、リターンする
         out, new_hidden = self.gru( embedded, hidden )
         return out, new_hidden
 
@@ -131,17 +131,25 @@ class Decoder( nn.Module ):
     def __init__( self, hidden_size, embedding_size, output_size ):
         super().__init__()
         self.hidden_size = hidden_size
+        # 単語をベクトル化する。1単語はembedding_sie次元のベクトルとなる
         self.embedding   = nn.Embedding( output_size, embedding_size )
+        # GRUによる実装（RNN素子の一種）
         self.gru         = nn.GRU( embedding_size, hidden_size )
-        self.out         = nn.Linear( hidden_size, output_size )
+        # 全結合して１層のネットワークにする
+        self.linear         = nn.Linear( hidden_size, output_size )
+        # softmaxのLogバージョン。dim=1で行方向を確率変換する(dim=0で列方向となる)
         self.softmax     = nn.LogSoftmax( dim = 1 )
         
     def forward( self, _input, hidden ):
-        output         = self.embedding( _input ).view( 1, 1, -1 )
-        output         = F.relu( output )
-        output, hidden = self.gru( output, hidden )
-        output         = self.softmax( self.out( output[ 0 ] ) )
-        return output, hidden
+        # 単語のベクトル化。GRUの入力に合わせ三次元テンソルにして渡す。
+        embedded           = self.embedding( _input ).view( 1, 1, -1 )
+        # relu活性化関数に突っ込む( 3次元のテンソル）
+        relu_embedded      = F.relu( embedded )
+        # GRU関数( 入力は３次元のテンソル )
+        gru_output, hidden = self.gru( relu_embedded, hidden )
+        # softmax関数の適用。outputは３次元のテンソルなので２次元のテンソルを渡す
+        result             = self.softmax( self.linear( gru_output[ 0 ] ) )
+        return result, hidden
     
     def initHidden( self ):
         return torch.zeros( 1, 1, self.hidden_size ).to( device )
@@ -230,117 +238,6 @@ def main():
             
     torch.save(encoder.state_dict(), './encoder_%d_%f' % (epoch, loss.item() / output_length  ))
     torch.save(decoder.state_dict(), './decoder_%d_%f' % (epoch, loss.item() / output_length  ))
-    
-def evaluate( sentence, max_length=10):
-
-    input_lang = Lang( 'jpn.txt')
-    output_lang  = Lang( 'eng.txt' )
-    
-    use_attention = False
-    
-    if False:
-        output_lang  = Lang( 'en.txt' )
-        allow_list = [x and y for (x,y) in zip( input_lang.get_allow_list( max_length ), output_lang.get_allow_list( max_length ) ) ]
-        input_lang.load_file( allow_list )
-        output_lang.load_file( allow_list )
-    else:
-        if use_attention:
-            allow_list = [x and y for (x,y) in zip( input_lang.get_allow_list( max_length ), output_lang.get_allow_list( max_length ) ) ]
-        else:
-            # allow_list  = output_lang.get_allow_list( max_length )
-            allow_list = [x and y for (x,y) in zip( input_lang.get_allow_list( max_length ), output_lang.get_allow_list( max_length ) ) ]
-        input_lang.load_file( allow_list )
-        output_lang.load_file( allow_list )
-        
-    hidden_size = 256
-    encoder = Encoder( input_lang.n_words, hidden_size ).to( device )
-    
-    if use_attention:
-        decoder           = DecoderAttention( hidden_size, output_lang.n_words, max_length ).to( device )
-    else:
-        decoder = Decoder( hidden_size, output_lang.n_words ).to( device )
-        
-
-
-    # encoder.load_state_dict(torch.load('encoders/encoder_75000_2.107082'))
-    # decoder.load_state_dict(torch.load('decoders/decoder_75000_2.107082'))
-    FRENCH = False
-    if FRENCH:
-        encoder.load_state_dict(torch.load('encoder_75000_2.335337'))
-        decoder.load_state_dict(torch.load('decoder_75000_2.335337'))
-    JAPANESE = True
-    
-    if JAPANESE: # without anotation, maxlength is 30
-        if use_attention:
-
-            encoder.load_state_dict(torch.load('encoder_75000_3.389340'))
-            decoder.load_state_dict(torch.load('decoder_75000_3.389340'))
-        else:
-            print( 'hello' )
-            # encoder.load_state_dict(torch.load('encoder_75000_1.985168'))
-            # decoder.load_state_dict(torch.load('decoder_75000_1.985168'))
-            # maxlenght 50, iter 4x times. 
-            encoder.load_state_dict(torch.load('encoder_300000_0.716090'))
-            decoder.load_state_dict(torch.load('decoder_300000_0.716090'))
-
-    
-    with torch.no_grad():
-        input_tensor   = tensorFromSentence(input_lang, sentence)
-        input_length   = input_tensor.size()[0]
-        encoder_hidden = encoder.initHidden()
-        if use_attention:
-            encoder_outputs = torch.zeros(max_length, encoder.hidden_size, device=device)
-        
-        for ei in range(input_length):
-            encoder_output, encoder_hidden = encoder(input_tensor[ei], encoder_hidden)
-            if use_attention:
-                encoder_outputs[ei] += encoder_output[0, 0]
-
-        decoder_input = torch.tensor([[SOS_token]], device=device)  # SOS
-        decoder_hidden = encoder_hidden
-        decoded_words = []
-        decoder_attentions = torch.zeros(max_length, max_length)
-        
-        for di in range(max_length):
-            if use_attention:
-                decoder_output, decoder_hidden, decoder_attention = decoder( decoder_input, decoder_hidden, encoder_outputs )
-            else:
-                decoder_output, decoder_hidden = decoder( decoder_input, decoder_hidden )
-                
-            topv, topi = decoder_output.data.topk(1)
-            if topi.item() == EOS_token:
-                decoded_words.append('<EOS>')
-
-
-
-
-                break
-            else:
-                decoded_words.append(output_lang.index2word[topi.item()])
-
-            decoder_input = topi.squeeze().detach()
-
-        return decoded_words, decoder_attentions[:di + 1]    
 
 if __name__ == '__main__':
     main()
-    exit( 0 )
-    import MeCab
-    import unicodedata
-    wakati = MeCab.Tagger("-Owakati")
-    sentence = 'この曲のことを知りません.'
-    sentence = 'とても悲しいです.'
-    sentence = '美味しい料理を食べたい.'
-    sentence = '海外に旅行に行きたい.'
-    sentence = '小学校では沢山楽しい思い出があります.'
-    sentence = 'この映画は面白いですか?'
-    
-    # sentence = '助けてくれませんか?'
-    # sentence = '外で雨が降っているけど,仕事をしなければならないので会社に行く.'
-    
-    sentence = unicodedata.normalize( "NFKC", sentence.strip() )
-    a=wakati.parse( sentence.strip() ).split()
-    ret =" ".join( a )
-    print( ret )
-    # print(evaluate( ret, 30 ) )
-    print(evaluate( ret, 50 ) )
