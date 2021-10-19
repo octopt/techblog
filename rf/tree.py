@@ -4,25 +4,69 @@ import random
 from math import log
 from PIL import Image, ImageOps
 
+import uuid
+import pickle
+
+# 画像をランダムにサンプリング
 def get_image_files( folder_path, picnum ):
     return random.sample( glob.glob( os.path.join( folder_path, '*.jpg' ) ), picnum )
 
-
-def main():
-    female = get_image_files( './female', 50 )
-    male = get_image_files( './male', 50 )
-    crop_size =32
-
-    # data structure
-    # [ [ ('F', [....] ), ('M', [....]), ('F', [....]) ], [ ('F', [....] ), ('M', [....]), ('F', [....])] ]
-    sets = []
+def tree_result( node, data ):
+    if 'leaf' in node: return node[ 'leaf' ]
+    index = node[ 'index' ]
+    value = node[ 'value' ]
     
+    cond = data[ index ] >= value
+    return tree_result( node[ cond ], data )
+
+def validation():
+    # with open('ret_9f36aa16223a4d09a33e7fecfb89e59e_size_1024_picknum_50_treenum_50.pkl', 'rb') as fd:
+    # with open('ret_ab19e7042e5242f2aa95ae4d4ca7e7d3_size_1024_picknum_30_treenum_50.pkl', 'rb') as fd:
+    with open('ret_126f956207384267851ccdeaf2962c59_size_1024_picknum_20_treenum_100.pkl', 'rb') as fd:
+    
+        forest = pickle.load(fd)
+    # print( forest )
+    num_pick = 100
+    female = get_image_files( './female', num_pick )
+    male = get_image_files( './male', num_pick )
+
+    crop_size =32
+    sets = []
+    # データセット作成
     sets += [ ('F', get_pixels( path, crop_size, crop_size ) ) for path in female ]
     sets += [ ('M', get_pixels( path, crop_size, crop_size ) ) for path in male ]
 
-    size = 32 * 32
-    
-    train( sets, size )
+    count = 0
+    for d in sets:
+        label, pixels = d
+        ans = tree_result( forest[ 0 ], pixels )
+        if label == ans:
+            count += 1
+    print( "true ratio --> ", count / (num_pick*2) )
+
+# female, maleフォルダより50個のファイルを取得する。
+def main():
+    forest = []
+    num_tree = 100
+    for i in range( num_tree ):
+        print( f"building tree ... {i+1}/{num_tree}")
+        num_pick = 20
+        female = get_image_files( './female', num_pick )
+        male = get_image_files( './male', num_pick )
+        
+        crop_size =32
+        sets = []
+        # データセット作成
+        sets += [ ('F', get_pixels( path, crop_size, crop_size ) ) for path in female ]
+        sets += [ ('M', get_pixels( path, crop_size, crop_size ) ) for path in male ]
+
+        size = 32 * 32
+        ret = train( sets, size )
+        forest.append( ret )
+    pkl_name = f"ret_{uuid.uuid4().hex}_size_{size}_picknum_{num_pick}_treenum_{num_tree}.pkl"
+    print( "dumped to --> ", pkl_name )
+    with open( pkl_name, 'wb' ) as fd:
+        pickle.dump( forest, fd )
 
 def get_pixels( path, w, h, crop_area = 0.86 ):
     img = Image.open( path )
@@ -88,8 +132,13 @@ def train( sets, size ):
                 best_criteria =( index, value )
                 best_sets=( set1, set2 )
     if best_gain > 0:
+        ans_index, ans_value = best_criteria
         true_branch = train( best_sets[ 0 ], size )
-        flase_branch = train( best_sets[ 1 ], size )
+        false_branch = train( best_sets[ 1 ], size )
+        return { True: true_branch, False: false_branch, 'index': ans_index, 'value': ans_value}
+    else:
+        return {'leaf': sets[0][0] }
         
 if __name__ == '__main__':
-    main()
+    # main()
+    validation()
